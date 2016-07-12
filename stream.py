@@ -31,25 +31,6 @@ def get_point_before_copy(arn):
     return shardId, sequenceNumber
 
 
-def isInSNrange(SNrange, sequenceN):
-    if sequenceN is '':
-        return False
-    n = int(sequenceN)
-    start = int(SNrange['StartingSequenceNumber'])
-    if n == 0:
-        return False
-
-    if 'EndingSequenceNumber' not in SNrange:
-        if n >= start:
-            return True
-    else:
-        end = int(SNrange['EndingSequenceNumber'])
-        if (sequenceN >= start and
-                sequenceN <= end):
-            return True
-    return False
-
-
 def get_stream_arn(table_name):
     rsp = client.list_streams(TableName=table_name)
     assert_aws_succ(rsp)
@@ -84,7 +65,7 @@ def get_records(ShardIterator):
         return rsp['Records'], None
 
 
-def handle_records(records, table, shardId, mod_cb):
+def handle_records(records, table, shardId):
     global count
     if table is None:
         sys.exit(0)
@@ -99,8 +80,6 @@ def handle_records(records, table, shardId, mod_cb):
                     'sequenceNumber': SequenceNumber})
             if record['eventName'] == 'INSERT' or record['eventName'] == 'MODIFY':
                 data = record['dynamodb']['NewImage']
-                if mod_cb:
-                    mod_cb(data)
                 try:
                     dbclient.put_item(TableName=table, Item=data)
                     count += 1
@@ -153,3 +132,51 @@ def get_shards(streamArn, shardId, nextpage):
             shards.append(s)
 
     return shards
+
+
+def handle_shards(shards, arn, sequenceN, dst):
+    shardId = ''
+    for shard in shards:
+        shardId = shard['ShardId']
+        SNrange = shard["SequenceNumberRange"]  # SequenceNumberRange
+        itr = None
+
+        if 'EndingSequenceNumber' not in SNrange:
+            s = "Shard(%s) is not closed" % shardId
+            logger.info(s)
+
+        print '%s, %s, %s' % (shardId, arn, sequenceN)
+
+        itr = get_shardIterator(shardId, arn, sequenceN)
+        sequenceN = ''
+        while True:
+            if itr is None:
+                logger.error('shardIterator is None')
+                break
+            records, itr = get_records(itr)
+            handle_records(records, dst, shardId)
+    return shardId
+
+
+def dynamodb_sync(src, dst, ShardId, SequenceNumber):
+    global hkey
+    if hkey is None:
+        hkey = "dbs_%s_to_%s" % (src, dst)
+
+    # 开始处理, 这个要一直跑
+    arn = src.latest_stream_arn
+    shardId = ShardId
+    nextpage=False
+    while True:
+        shards = get_shards(arn, shardId, nextpage)
+        if len(shards) is 0:
+            nextpage = True
+        else:
+            nextpage = False
+        logger.info("Len shards = %s" % len(shards))
+        shardId = handle_shards(shards=shards, arn=arn, dst=dst,
+                                sequenceN=SequenceNumber)
+        SequenceNumber = ''
+        if shardId is None:
+            logger.error("Dynamodb end, Shardid is None")
+            break

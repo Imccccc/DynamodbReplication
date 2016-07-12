@@ -7,6 +7,7 @@ import logging
 import json
 import time
 import sys
+import stream
 
 
 dynamodb = boto3.resource('dynamodb')
@@ -135,6 +136,8 @@ def main():
         # get the last stream itera
         db_copy(src, dst, backup_file)
         # start stream
+        shardId, sequenceNumber = stream.get_point_before_copy(src.latest_stream_arn)
+        stream.dynamodb_sync(src, dst, ShardId, SequenceNumber)
     elif 'db_copy' in backup_info:
         logger.debug('Resume copy process')
     else:  # 处理stream断掉的情况
